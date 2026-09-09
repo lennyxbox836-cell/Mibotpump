@@ -95,7 +95,7 @@ automatica (take-profit, stop-loss o tiempo maximo, lo que ocurra primero).
 **Como compra:** usa la Local Transaction API de PumpPortal, que arma la
 transaccion sobre la bonding curve de pump.fun (no existe ruta de Jupiter
 para tokens que todavia no graduaron a Raydium). La transaccion se firma
-ac"a mismo, con tu clave, y se manda por tu propio RPC. La clave privada
+aca mismo, con tu clave, y se manda por tu propio RPC. La clave privada
 nunca sale de tu maquina ni se manda a ningun servidor de terceros. (Existe
 tambien una API "Lightning" de PumpPortal que es custodial -- depositas SOL
 en una wallet de ellos -- y **no se usa** en este bot a proposito.)
@@ -118,6 +118,29 @@ en una wallet de ellos -- y **no se usa** en este bot a proposito.)
 **Circuit breaker:** si el balance de la wallet cae mas de
 `PERDIDA_MAX_SESION_SOL` desde el inicio de la sesion, el bot deja de
 abrir posiciones nuevas (las que ya estan abiertas se siguen manejando).
+
+**Salida event-driven, no por polling:** la condicion de salida se evalua
+en el mismo instante en que llega el dato de precio de un trade nuevo, no
+en el siguiente chequeo periodico. El barrido de fondo (cada 0.5s) es solo
+una red de seguridad para el caso de `MAX_HOLD_SEG` cuando un token se
+queda sin trades (sin volumen, tampoco llegarian eventos que disparen la
+salida). Las llamadas de red (compra/venta) corren en un hilo aparte para
+no trabar el procesamiento de otros tokens mientras una transaccion esta
+en vuelo.
+
+**Sobre "ganarle" a los dumps -- limites reales, no de software:** ningun
+diseño de bot elimina el riesgo de que te vendan encima. Aunque la
+deteccion sea instantanea del lado del cliente, tu venta sigue atada a:
+la latencia del feed de PumpPortal hasta que te llega el evento, el
+viaje de ida y vuelta para armar la transaccion, y el tiempo de bloque de
+Solana (~400ms) hasta que tu venta queda incluida. Si un wallet grande
+larga una venta que se lleva puesta toda la liquidez en un solo bloque,
+tu bot puede reaccionar "al instante" y aun asi llegar tarde -- no hay
+transaccion que viaje mas rapido que el bloque que ya se cerro. Lo que
+esta mejora reduce es el retraso que agregaba el propio codigo (hasta 1s
+de antes), no la latencia de red ni la posibilidad de quedar del lado
+perdedor de un dump. Un RPC de baja latencia (Helius, Triton, etc.) pesa
+mas en esto que cualquier ajuste de codigo.
 
 ### Uso
 

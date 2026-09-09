@@ -6,7 +6,7 @@ automatica.
 A diferencia de pump_scanner.py (que solo observa 300s antes de opinar),
 este bot decide en segundos: la mayoria de los tokens de pump.fun pumpean
 y caen dentro del primer minuto, asi que esperar el analisis completo
-significa comprar despues de la caida. Ac"a el filtro es minimo mientras
+significa comprar despues de la caida. Aca el filtro es minimo mientras
 se compra rapido, y la proteccion pasa a la SALIDA: take-profit,
 stop-loss y un tiempo maximo de holdeo, lo que se cumpla primero.
 
@@ -127,18 +127,36 @@ class Posicion:
 
 
 class Bot:
+    """
+    Las llamadas de red (PumpPortal + RPC) son bloqueantes (usan `requests`),
+    asi que corren en un hilo aparte via run_in_executor: la venta se dispara
+    apenas llega el evento de trade que confirma la razon de salida, sin
+    esperar el proximo tick del barrido y sin trabar el loop mientras esa
+    venta esta en vuelo (para poder seguir reaccionando a otras posiciones
+    en paralelo).
+    """
+
     def __init__(self, wallet):
         self.wallet = wallet
         self.candidatos = {}
         self.posiciones = {}
         self.saldo_inicial = None
+        self.ws = None
+        self._tareas = set()
 
-    def circuito_abierto(self):
+    def _lanzar(self, coro):
+        tarea = asyncio.create_task(coro)
+        self._tareas.add(tarea)
+        tarea.add_done_callback(self._tareas.discard)
+        return tarea
+
+    async def circuito_abierto(self):
         """True si se puede seguir comprando (no se toco el limite de perdida)."""
         if DRY_RUN or self.saldo_inicial is None:
             return True
+        loop = asyncio.get_running_loop()
         try:
-            saldo = pump_trader.obtener_balance_sol(self.wallet.pubkey())
+            saldo = await loop.run_in_executor(None, pump_trader.obtener_balance_sol, self.wallet.pubkey())
         except Exception as e:
             log(f"no se pudo leer balance ({e}), no abro posiciones nuevas por las dudas")
             return False
@@ -154,56 +172,68 @@ class Bot:
         self.saldo_inicial = pump_trader.obtener_balance_sol(self.wallet.pubkey())
         log(f"saldo inicial: {self.saldo_inicial:.4f} SOL")
 
-    def comprar(self, cand):
-        if len(self.posiciones) >= MAX_POSICIONES_ABIERTAS:
+    async def comprar(self, cand):
+        if len(self.posiciones) >= MAX_POSICIONES_ABIERTAS or cand.mint in self.posiciones:
             return
-        if not self.circuito_abierto():
+        if not await self.circuito_abierto():
             return
+        # Reservar el lugar ANTES de cualquier await: evita que dos compras
+        # concurrentes pasen el chequeo de MAX_POSICIONES_ABIERTAS a la vez.
+        self.posiciones[cand.mint] = Posicion(cand.mint, cand.simbolo, cand.mcap, SOL_POR_COMPRA)
         log(f"COMPRANDO {cand.simbolo} ({cand.mint}) por {SOL_POR_COMPRA} SOL")
+        loop = asyncio.get_running_loop()
         try:
-            pump_trader.comprar(self.wallet, cand.mint, SOL_POR_COMPRA,
-                                 SLIPPAGE_PCT, PRIORITY_FEE_SOL, POOL, DRY_RUN)
+            await loop.run_in_executor(
+                None, pump_trader.comprar, self.wallet, cand.mint, SOL_POR_COMPRA,
+                SLIPPAGE_PCT, PRIORITY_FEE_SOL, POOL, DRY_RUN)
         except Exception as e:
             log(f"ERROR al comprar {cand.simbolo}: {e}")
-            return
-        self.posiciones[cand.mint] = Posicion(cand.mint, cand.simbolo, cand.mcap, SOL_POR_COMPRA)
+            self.posiciones.pop(cand.mint, None)
 
-    def vender(self, mint, razon):
+    async def vender(self, mint, razon):
         pos = self.posiciones.pop(mint, None)
         if not pos:
             return
         log(f"VENDIENDO {pos.simbolo} ({razon})")
+        loop = asyncio.get_running_loop()
         try:
-            pump_trader.vender(self.wallet, mint, "100%",
-                                SLIPPAGE_PCT, PRIORITY_FEE_SOL, POOL, DRY_RUN)
+            await loop.run_in_executor(
+                None, pump_trader.vender, self.wallet, mint, "100%",
+                SLIPPAGE_PCT, PRIORITY_FEE_SOL, POOL, DRY_RUN)
         except Exception as e:
-            log(f"ERROR al vender {pos.simbolo}: {e}")
+            log(f"ERROR al vender {pos.simbolo}: {e} -- se reintentara con el proximo trade/tick")
+            self.posiciones[mint] = pos
+            return
+        if self.ws:
+            try:
+                await self.ws.send(json.dumps({"method": "unsubscribeTokenTrade", "keys": [mint]}))
+            except Exception:
+                pass
 
-    async def barrer(self, ws):
+    async def barrer(self):
         while True:
-            await asyncio.sleep(1)
+            await asyncio.sleep(0.5)
 
             for mint in [k for k, c in self.candidatos.items() if c.edad >= FILTRO_RAPIDO_SEG]:
                 cand = self.candidatos.pop(mint)
                 ok, motivo = cand.pasa_filtro()
                 if ok:
-                    self.comprar(cand)
+                    self._lanzar(self.comprar(cand))
                 else:
                     log(f"descartado {cand.simbolo}: {motivo}")
-                if mint not in self.posiciones:
-                    try:
-                        await ws.send(json.dumps({"method": "unsubscribeTokenTrade", "keys": [mint]}))
-                    except Exception:
-                        pass
+                    if self.ws:
+                        try:
+                            await self.ws.send(json.dumps({"method": "unsubscribeTokenTrade", "keys": [mint]}))
+                        except Exception:
+                            pass
 
+            # Red de seguridad para MAX_HOLD_SEG: sin esto, un token que dejo
+            # de tener trades (sin liquidez para vender ni para nadie) nunca
+            # generaria un evento que dispare la salida por tiempo.
             for mint, pos in list(self.posiciones.items()):
                 razon = pos.razon_de_salida()
                 if razon:
-                    self.vender(mint, razon)
-                    try:
-                        await ws.send(json.dumps({"method": "unsubscribeTokenTrade", "keys": [mint]}))
-                    except Exception:
-                        pass
+                    self._lanzar(self.vender(mint, razon))
 
     def procesar_evento(self, d):
         mint = d.get("mint")
@@ -228,7 +258,13 @@ class Bot:
         if mint in self.candidatos:
             self.candidatos[mint].registrar(wallet, sol, mcap, tipo)
         elif mint in self.posiciones and mcap:
-            self.posiciones[mint].mcap_actual = mcap
+            # Se evalua la salida ACA, en el mismo instante en que llega el
+            # dato de precio -- no se espera al barrido periodico.
+            pos = self.posiciones[mint]
+            pos.mcap_actual = mcap
+            razon = pos.razon_de_salida()
+            if razon:
+                self._lanzar(self.vender(mint, razon))
         return None
 
 
@@ -247,10 +283,11 @@ async def main():
     log(f"Conectando a {WS_URL}")
     async for ws in websockets.connect(WS_URL, ping_interval=20, ping_timeout=20):
         try:
+            bot.ws = ws
             await ws.send(json.dumps({"method": "subscribeNewToken"}))
             log("Suscrito a tokens nuevos. Ctrl+C para salir.\n")
 
-            tarea_barrido = asyncio.create_task(bot.barrer(ws))
+            tarea_barrido = asyncio.create_task(bot.barrer())
             try:
                 while True:
                     raw = await ws.recv()
@@ -264,6 +301,7 @@ async def main():
                             {"method": "subscribeTokenTrade", "keys": [d["mint"]]}))
             finally:
                 tarea_barrido.cancel()
+                bot.ws = None
 
         except websockets.ConnectionClosed:
             log("Conexion cerrada. Reintentando en 5s...")
