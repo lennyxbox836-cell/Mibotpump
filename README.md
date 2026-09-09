@@ -1,11 +1,14 @@
 # pump-scanner
 
-Monitor en tiempo real de tokens nuevos en pump.fun via WebSocket.
-Aplica filtros cuantitativos de liquidez y deteccion de wash trading,
-y avisa con sonido y notificacion cuando un token los pasa.
+Monitor en tiempo real de tokens nuevos en pump.fun via WebSocket, mas
+un bot opcional de compra/venta automatica.
 
-**Solo analiza.** No compra, no vende, no firma transacciones y no
-usa claves privadas.
+Este repo trae dos herramientas independientes:
+
+| Script | Que hace | Usa claves privadas / plata real |
+|---|---|---|
+| `src/pump_scanner.py` | Observa 300s, filtra por liquidez y wash trading, avisa | No. Solo analiza. |
+| `src/pump_sniper.py`  | Filtro rapido (segundos) + compra automatica + venta por take-profit/stop-loss/tiempo | Si, cuando `DRY_RUN = False` |
 
 ---
 
@@ -79,6 +82,91 @@ MAX_CONCENTRACION = 0.15
 Cada 25 tokens revisados imprime la tasa de aprobacion acumulada.
 Esperá que sea baja: **1-3%** es lo normal. Ese numero no es un fallo
 del script, es la tasa base del mercado que esta midiendo.
+
+## pump_sniper.py - compra y venta automatica
+
+`pump_scanner.py` espera 300s para juntar suficientes datos y evitar
+tokens sin salida, pero en pump.fun la mayoria de los tokens pumpean y
+caen dentro del primer minuto: para cuando termina esa ventana, la
+oportunidad de entrada ya paso. `pump_sniper.py` resuelve esto al reves:
+compra rapido con un filtro minimo, y pone la proteccion en la **salida**
+automatica (take-profit, stop-loss o tiempo maximo, lo que ocurra primero).
+
+**Como compra:** usa la Local Transaction API de PumpPortal, que arma la
+transaccion sobre la bonding curve de pump.fun (no existe ruta de Jupiter
+para tokens que todavia no graduaron a Raydium). La transaccion se firma
+ac"a mismo, con tu clave, y se manda por tu propio RPC. La clave privada
+nunca sale de tu maquina ni se manda a ningun servidor de terceros. (Existe
+tambien una API "Lightning" de PumpPortal que es custodial -- depositas SOL
+en una wallet de ellos -- y **no se usa** en este bot a proposito.)
+
+**Filtro rapido (segundos, no minutos):**
+
+| Filtro | Que detecta |
+|---|---|
+| El creador del token vendio | Senal mas clara de rug pull que existe |
+| `traders` minimos en la ventana | Que no sea un solo wallet operando solo |
+| Concentracion de volumen | Que no sea una sola wallet inflando el volumen |
+
+**Salida automatica**, la primera condicion que se cumpla:
+
+- `TAKE_PROFIT_MULT` -- vende cuando el market cap sube ese multiplo
+- `STOP_LOSS_MULT` -- vende cuando cae a ese multiplo
+- `MAX_HOLD_SEG` -- vende igual pasado ese tiempo, para no quedarse
+  esperando una salida que no llega
+
+**Circuit breaker:** si el balance de la wallet cae mas de
+`PERDIDA_MAX_SESION_SOL` desde el inicio de la sesion, el bot deja de
+abrir posiciones nuevas (las que ya estan abiertas se siguen manejando).
+
+### Uso
+
+```bash
+export SOLANA_PRIVATE_KEY='tu_clave_privada_base58'   # nunca la escribas en el codigo
+export SOLANA_RPC_URL='https://tu-rpc-rapido.com'      # opcional, usa uno publico por defecto
+python src/pump_sniper.py
+```
+
+Por defecto arranca con `DRY_RUN = True` (al inicio de
+`src/pump_sniper.py`): loguea que compraria/venderia pero no manda nada
+a la red ni gasta un solo lamport. Confirma que el comportamiento es el
+esperado viendo los logs un rato antes de poner `DRY_RUN = False`.
+
+### Configuracion
+
+Todos los parametros estan al inicio de `src/pump_sniper.py`:
+
+```python
+DRY_RUN = True                  # False = plata real. Empeza en True.
+FILTRO_RAPIDO_SEG   = 8
+MIN_TRADERS_RAPIDO  = 5
+MAX_CONCENTRACION   = 0.5
+SOL_POR_COMPRA       = 0.02
+SLIPPAGE_PCT         = 20
+TAKE_PROFIT_MULT     = 1.8
+STOP_LOSS_MULT       = 0.6
+MAX_HOLD_SEG         = 90
+MAX_POSICIONES_ABIERTAS = 3
+PERDIDA_MAX_SESION_SOL  = 0.5
+```
+
+### Advertencias especificas de este script
+
+- **Usa dinero real cuando `DRY_RUN = False`.** Probalo primero en dry
+  run, despues con `SOL_POR_COMPRA` chico, antes de subir el monto.
+- El filtro rapido es deliberadamente mas laxo que el de
+  `pump_scanner.py` -- es la contrapartida de comprar en segundos en vez
+  de minutos. No elimina el riesgo, solo saca el caso mas obvio (dev
+  vendiendo).
+- Un RPC publico puede ser lento; en pump.fun la velocidad de ejecucion
+  importa. Si vas en serio, un RPC dedicado (Helius, QuickNode, etc.)
+  ayuda mas que ajustar cualquier otro parametro.
+- El PnL logueado es una estimacion en base al market cap, no la plata
+  efectivamente recibida (eso depende del slippage real de la bonding
+  curve en el momento de la venta).
+- Todo lo que dice la seccion "Sobre las expectativas" mas abajo aplica
+  igual o peor aca: comprar mas rapido no cambia que la mayoria de estos
+  tokens pierden valor, solo cambia en que momento entras y salis.
 
 ## Limitaciones
 
