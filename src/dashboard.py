@@ -39,6 +39,7 @@ PAGINA = """<!doctype html>
 <body>
   <h1>pump_sniper <span id="modo" class="badge">...</span></h1>
   <div class="sub" id="wallet"></div>
+  <div class="sub" id="wallets-seguidas"></div>
 
   <div class="grid" id="stats"></div>
 
@@ -80,18 +81,23 @@ async function actualizar() {
   );
 
   document.getElementById("posiciones").innerHTML = tabla(
-    ["Simbolo", "Mint", "Multiplo", "Edad (s)"],
-    r.posiciones_abiertas.map(p => [p.simbolo, corto(p.mint), claseMultiplo(p.multiplo), fmt(p.edad,1)])
+    ["Simbolo", "Mint", "Multiplo", "Edad (s)", "Origen"],
+    r.posiciones_abiertas.map(p => [p.simbolo, corto(p.mint), claseMultiplo(p.multiplo), fmt(p.edad,1), p.origen])
   );
 
   document.getElementById("historial").innerHTML = tabla(
-    ["Hora", "Simbolo", "Razon", "Multiplo", "PnL"],
+    ["Hora", "Simbolo", "Razon", "Multiplo", "PnL", "Origen"],
     r.historial.map(h => [
       new Date(h.t * 1000).toLocaleTimeString(),
       h.simbolo, h.razon, claseMultiplo(h.multiplo),
-      h.pnl_usd === null ? "-" : signo(h.pnl_usd)
+      h.pnl_usd === null ? "-" : signo(h.pnl_usd), h.origen || "-"
     ])
   );
+
+  const wSeguidas = document.getElementById("wallets-seguidas");
+  wSeguidas.textContent = r.wallets_seguidas.length
+    ? "Copiando: " + r.wallets_seguidas.join(", ")
+    : "No se esta copiando a ninguna wallet (PUMP_COPY_WALLETS vacio)";
 }
 
 function stat(l, v) {

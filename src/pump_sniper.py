@@ -62,7 +62,13 @@ MAX_CONCENTRACION   = 0.5    # % maximo del volumen inicial en una sola wallet
 SOL_POR_COMPRA       = 0.02  # SOL que arriesga cada compra
 SLIPPAGE_PCT         = 20
 PRIORITY_FEE_SOL     = 0.0005
-POOL                 = "pump"
+POOL                 = "pump"   # tokens nuevos: siempre en la bonding curve
+POOL_COPY            = "auto"   # copy-trading: el token seguido puede ya haber graduado a Raydium
+
+# Wallets a copiar (ademas del filtro propio), separadas por coma:
+#   PUMP_COPY_WALLETS=wallet1,wallet2 python pump_sniper.py
+# Vacio por defecto = no se copia a nadie, se usa solo el filtro propio.
+WALLETS_SEGUIDAS = [w.strip() for w in os.environ.get("PUMP_COPY_WALLETS", "").split(",") if w.strip()]
 
 TAKE_PROFIT_MULT     = 1.8   # vende al +80% de mcap sobre el precio de entrada
 STOP_LOSS_MULT       = 0.6   # vende al -40%
@@ -184,13 +190,14 @@ class BilleteraSimulada:
 
 
 class Posicion:
-    def __init__(self, mint, simbolo, mcap_entrada, sol_invertido, apuesta_usd=None):
+    def __init__(self, mint, simbolo, mcap_entrada, sol_invertido, apuesta_usd=None, origen="filtro"):
         self.mint = mint
         self.simbolo = simbolo
         self.mcap_entrada = mcap_entrada or 1e-9
         self.mcap_actual = self.mcap_entrada
         self.sol_invertido = sol_invertido
         self.apuesta_usd = apuesta_usd  # solo se usa para liquidar contra la billetera simulada
+        self.origen = origen  # "filtro" o "copy:<wallet corta>"
         self.t_compra = time.time()
 
     @property
@@ -231,6 +238,7 @@ class Bot:
         self.precio_sol_usd = SOL_USD_FALLBACK
         self.billetera = BilleteraSimulada(SALDO_FICTICIO_INICIAL_USD) if DRY_RUN else None
         self.historial = collections.deque(maxlen=HISTORIAL_MAX)
+        self.wallets_seguidas = set(WALLETS_SEGUIDAS)
 
     def _lanzar(self, coro):
         tarea = asyncio.create_task(coro)
@@ -260,8 +268,8 @@ class Bot:
         self.saldo_inicial = pump_trader.obtener_balance_sol(self.wallet.pubkey())
         log(f"saldo inicial: {self.saldo_inicial:.4f} SOL")
 
-    async def comprar(self, cand):
-        if len(self.posiciones) >= MAX_POSICIONES_ABIERTAS or cand.mint in self.posiciones:
+    async def comprar(self, mint, simbolo, mcap, pool=POOL, origen="filtro"):
+        if len(self.posiciones) >= MAX_POSICIONES_ABIERTAS or mint in self.posiciones:
             return
         if not await self.circuito_abierto():
             return
@@ -278,22 +286,24 @@ class Bot:
 
         # Reservar el lugar ANTES de cualquier await: evita que dos compras
         # concurrentes pasen el chequeo de MAX_POSICIONES_ABIERTAS a la vez.
-        self.posiciones[cand.mint] = Posicion(cand.mint, cand.simbolo, cand.mcap, monto_sol, apuesta_usd)
+        self.posiciones[mint] = Posicion(mint, simbolo, mcap, monto_sol, apuesta_usd, origen)
 
         extra = ""
         if self.billetera:
             extra = (f" (${apuesta_usd:.2f} ficticios, kelly {self.billetera.kelly_fraccionario()*100:.1f}%, "
                      f"saldo ${self.billetera.saldo_usd:.2f})")
-        log(f"COMPRANDO {cand.simbolo} ({cand.mint}) por {monto_sol:.4f} SOL{extra}")
+        etiqueta = "COPIANDO" if origen.startswith("copy:") else "COMPRANDO"
+        log(f"{etiqueta} {simbolo} ({mint}) por {monto_sol:.4f} SOL{extra}"
+            + (f" -- {origen}" if origen.startswith("copy:") else ""))
 
         loop = asyncio.get_running_loop()
         try:
             await loop.run_in_executor(
-                None, pump_trader.comprar, self.wallet, cand.mint, monto_sol,
-                SLIPPAGE_PCT, PRIORITY_FEE_SOL, POOL, DRY_RUN)
+                None, pump_trader.comprar, self.wallet, mint, monto_sol,
+                SLIPPAGE_PCT, PRIORITY_FEE_SOL, pool, DRY_RUN)
         except Exception as e:
-            log(f"ERROR al comprar {cand.simbolo}: {e}")
-            self.posiciones.pop(cand.mint, None)
+            log(f"ERROR al comprar {simbolo}: {e}")
+            self.posiciones.pop(mint, None)
 
     async def vender(self, mint, razon):
         pos = self.posiciones.pop(mint, None)
@@ -318,7 +328,7 @@ class Bot:
                 f"({len(self.billetera.resultados)} operaciones)")
 
         self.historial.append({
-            "t": time.time(), "simbolo": pos.simbolo, "razon": razon,
+            "t": time.time(), "simbolo": pos.simbolo, "razon": razon, "origen": pos.origen,
             "multiplo": round(pos.multiplo, 3), "pnl_usd": round(pnl_usd, 2) if pnl_usd is not None else None,
         })
 
@@ -342,10 +352,12 @@ class Bot:
                 for c in self.candidatos.values()
             ],
             "posiciones_abiertas": [
-                {"simbolo": p.simbolo, "mint": p.mint, "multiplo": round(p.multiplo, 3), "edad": round(p.edad, 1)}
+                {"simbolo": p.simbolo, "mint": p.mint, "multiplo": round(p.multiplo, 3),
+                 "edad": round(p.edad, 1), "origen": p.origen}
                 for p in self.posiciones.values()
             ],
             "historial": list(self.historial)[::-1],
+            "wallets_seguidas": [w[:4] + ".." + w[-4:] for w in self.wallets_seguidas],
         }
 
     async def barrer(self):
@@ -356,7 +368,7 @@ class Bot:
                 cand = self.candidatos.pop(mint)
                 ok, motivo = cand.pasa_filtro()
                 if ok:
-                    self._lanzar(self.comprar(cand))
+                    self._lanzar(self.comprar(cand.mint, cand.simbolo, cand.mcap))
                 else:
                     log(f"descartado {cand.simbolo}: {motivo}")
                     if self.ws:
@@ -374,6 +386,7 @@ class Bot:
                     self._lanzar(self.vender(mint, razon))
 
     def procesar_evento(self, d):
+        """Devuelve un mint si hace falta suscribirse a sus trades, o None."""
         mint = d.get("mint")
         if not mint:
             return None
@@ -386,12 +399,24 @@ class Bot:
                 mint, d.get("name", "?"), d.get("symbol", "?"),
                 d.get("traderPublicKey"), d.get("marketCapSol", 0.0),
             )
-            return "nuevo"
+            return mint
 
         wallet = d.get("traderPublicKey")
         sol = float(d.get("solAmount", 0) or 0)
         mcap = d.get("marketCapSol")
         tipo = "sell" if d.get("txType") == "sell" else "buy"
+
+        # Senal de copy-trading: tiene prioridad sobre el filtro propio.
+        if wallet in self.wallets_seguidas:
+            corto = wallet[:4] + ".." + wallet[-4:]
+            if tipo == "sell" and mint in self.posiciones:
+                self._lanzar(self.vender(mint, f"trader seguido {corto} vendio"))
+            elif tipo == "buy" and mint not in self.posiciones:
+                self.candidatos.pop(mint, None)  # no hace falta esperar el filtro propio
+                simbolo = d.get("symbol") or (mint[:6] + "..")
+                self._lanzar(self.comprar(mint, simbolo, mcap, pool=POOL_COPY, origen=f"copy:{corto}"))
+                return mint  # necesita suscripcion para poder vigilar la salida despues
+            return None
 
         if mint in self.candidatos:
             self.candidatos[mint].registrar(wallet, sol, mcap, tipo)
@@ -434,7 +459,12 @@ async def main():
         try:
             bot.ws = ws
             await ws.send(json.dumps({"method": "subscribeNewToken"}))
-            log("Suscrito a tokens nuevos. Ctrl+C para salir.\n")
+            log("Suscrito a tokens nuevos.")
+            if bot.wallets_seguidas:
+                await ws.send(json.dumps({"method": "subscribeAccountTrade", "keys": list(bot.wallets_seguidas)}))
+                cortos = ", ".join(w[:4] + ".." + w[-4:] for w in bot.wallets_seguidas)
+                log(f"Copiando trades de: {cortos}")
+            log("Ctrl+C para salir.\n")
 
             tarea_barrido = asyncio.create_task(bot.barrer())
             try:
@@ -445,9 +475,10 @@ async def main():
                     except json.JSONDecodeError:
                         continue
 
-                    if bot.procesar_evento(d) == "nuevo":
+                    mint_a_suscribir = bot.procesar_evento(d)
+                    if mint_a_suscribir:
                         await ws.send(json.dumps(
-                            {"method": "subscribeTokenTrade", "keys": [d["mint"]]}))
+                            {"method": "subscribeTokenTrade", "keys": [mint_a_suscribir]}))
             finally:
                 tarea_barrido.cancel()
                 bot.ws = None

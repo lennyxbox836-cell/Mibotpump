@@ -114,6 +114,32 @@ en una wallet de ellos -- y **no se usa** en este bot a proposito.)
 - `STOP_LOSS_MULT` -- vende cuando cae a ese multiplo
 - `MAX_HOLD_SEG` -- vende igual pasado ese tiempo, para no quedarse
   esperando una salida que no llega
+- El trader copiado vendio (ver "Copy-trading" abajo) -- tiene prioridad
+  sobre las otras tres, se ejecuta al instante sin importar el multiplo
+
+**Copy-trading (opcional):** ademas del filtro propio, el bot puede
+seguir las compras/ventas de wallets puntuales via `PUMP_COPY_WALLETS`
+(direcciones de Solana separadas por coma):
+
+```bash
+PUMP_COPY_WALLETS=direccionWallet1,direccionWallet2 python pump_sniper.py
+```
+
+Cuando una de esas wallets compra un token, el bot lo compra tambien casi
+al instante (salteando la ventana de 8s del filtro propio -- la idea es
+copiar rapido, no re-analizar), usando el `pool="auto"` de PumpPortal por
+si el token ya migro a Raydium. Cuando esa wallet vende, el bot vende esa
+posicion en el mismo instante, sin esperar take-profit/stop-loss/tiempo.
+En el dashboard, las posiciones y el historial muestran su `origen`
+(`filtro` o `copy:<wallet corta>`) para distinguir de donde vino cada una.
+
+Riesgos propios de esto, que el filtro cuantitativo no tiene: no hay
+forma de saber si esa wallet es genuinamente buena, es el equipo del
+propio token operando su holding para atraer copiadores, o si la senal
+llega publica y otros bots la copian al mismo tiempo que el tuyo (lo que
+puede mover el precio en tu contra antes de que tu compra confirme). Sin
+`PUMP_COPY_WALLETS` seteada (default), esto no hace nada -- se usa
+unicamente el filtro propio, como antes.
 
 **Circuit breaker:** si el balance de la wallet cae mas de
 `PERDIDA_MAX_SESION_SOL` desde el inicio de la sesion, el bot deja de
