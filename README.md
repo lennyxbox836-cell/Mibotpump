@@ -179,34 +179,45 @@ mas en esto que cualquier ajuste de codigo.
 
 ### Uso
 
-Para probar en `DRY_RUN` (default), **`SOLANA_PRIVATE_KEY` es opcional**:
-si falta o esta mal escrita, el bot genera una wallet temporal solo para
-poder simular y arranca igual (avisa en el log que lo hizo).
+El modo (simulado o real) se controla por variable de entorno, **no hay
+que editar el codigo para alternar entre uno y otro**.
+
+**Simulado (default, sin nada seteado):**
 
 ```bash
 python src/pump_sniper.py
 ```
 
-Cuando quieras pasar a modo real (`DRY_RUN = False`), ahi si es
-obligatoria una clave valida con fondos:
+`SOLANA_PRIVATE_KEY` es opcional en este modo: si falta o esta mal
+escrita, el bot genera una wallet temporal solo para poder simular y
+arranca igual (avisa en el log que lo hizo). Loguea que compraria/venderia
+pero no manda nada a la red ni gasta un solo lamport.
+
+**Real:**
 
 ```bash
 export SOLANA_PRIVATE_KEY='tu_clave_privada_base58'   # nunca la escribas en el codigo
 export SOLANA_RPC_URL='https://tu-rpc-rapido.com'      # opcional, usa uno publico por defecto
+export PUMP_LIVE=1
 python src/pump_sniper.py
 ```
 
-Por defecto arranca con `DRY_RUN = True` (al inicio de
-`src/pump_sniper.py`): loguea que compraria/venderia pero no manda nada
-a la red ni gasta un solo lamport. Confirma que el comportamiento es el
-esperado viendo los logs un rato antes de poner `DRY_RUN = False`.
+Hacen falta **las dos cosas** para operar real: `SOLANA_PRIVATE_KEY`
+valida Y `PUMP_LIVE=1`. Es a proposito -- tener la clave exportada de una
+prueba anterior en la terminal no alcanza para que empiece a gastar SOL
+solo; falta el segundo interruptor explicito. Sin `PUMP_LIVE=1` (o con
+cualquier otro valor), corre en modo simulado sin importar si la clave
+esta seteada o no. Para volver a simulado despues de haber operado real,
+alcanza con `unset PUMP_LIVE` (o `export PUMP_LIVE=0`) en esa terminal.
 
 ### Configuracion
 
-Todos los parametros estan al inicio de `src/pump_sniper.py`:
+Todos los parametros estan al inicio de `src/pump_sniper.py`. `DRY_RUN`
+en particular NO se edita a mano ahi -- se define solo a partir de
+`PUMP_LIVE` (ver "Uso" arriba):
 
 ```python
-DRY_RUN = True                  # False = plata real. Empeza en True.
+DRY_RUN = ...                   # NO tocar: sale de la env var PUMP_LIVE
 FILTRO_RAPIDO_SEG   = 8
 MIN_TRADERS_RAPIDO  = 5
 MAX_CONCENTRACION   = 0.5

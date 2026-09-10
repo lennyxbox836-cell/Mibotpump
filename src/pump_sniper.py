@@ -10,17 +10,27 @@ significa comprar despues de la caida. Aca el filtro es minimo mientras
 se compra rapido, y la proteccion pasa a la SALIDA: take-profit,
 stop-loss y un tiempo maximo de holdeo, lo que se cumpla primero.
 
-En DRY_RUN (el default) no hace falta SOLANA_PRIVATE_KEY -- si falta o
-esta mal, se genera una wallet temporal solo para poder simular. En modo
-real (DRY_RUN = False) si es obligatoria y tiene que ser una clave valida
-con fondos.
+Modo simulado o real: se decide por la variable de entorno PUMP_LIVE, NO
+hay que tocar el codigo para alternar entre uno y otro.
 
-USA DINERO REAL cuando DRY_RUN = False. Empeza con montos chicos.
+  - Sin PUMP_LIVE (o con cualquier valor que no sea 1/true/si): DRY_RUN.
+    No hace falta SOLANA_PRIVATE_KEY -- si falta o esta mal, se genera
+    una wallet temporal solo para poder simular.
+  - PUMP_LIVE=1: modo real. Ademas hace falta una SOLANA_PRIVATE_KEY
+    valida con fondos -- si no esta, el bot corta con error antes de
+    operar (no hay wallet temporal para esto).
+
+Los dos interruptores son independientes a proposito: tener la clave
+exportada de una prueba anterior no alcanza para operar real, hace falta
+ademas poner PUMP_LIVE=1 explicitamente.
+
+USA DINERO REAL cuando PUMP_LIVE=1. Empeza con montos chicos.
 """
 
 import asyncio
 import collections
 import json
+import os
 import sys
 import time
 from datetime import datetime
@@ -36,7 +46,9 @@ import pump_trader
 WS_URL = "wss://pumpportal.fun/api/data"
 
 # ---------------- CONFIGURACION ----------------
-DRY_RUN = True              # False = manda transacciones reales. EMPEZA EN True.
+# DRY_RUN se define por la variable de entorno PUMP_LIVE (ver docstring
+# de arriba). No cambies esto a mano en el codigo -- usa PUMP_LIVE=1.
+DRY_RUN = os.environ.get("PUMP_LIVE", "").strip().lower() not in ("1", "true", "si", "yes")
 
 FILTRO_RAPIDO_SEG   = 8      # ventana de observacion antes de decidir comprar
 MIN_TRADERS_RAPIDO  = 5      # wallets unicas minimas en esa ventana
