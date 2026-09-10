@@ -144,6 +144,16 @@ logica a plata real (`DRY_RUN = False`) es una decision aparte que este
 bot no toma sola -- `SOL_POR_COMPRA` en real sigue siendo un monto fijo,
 manual, deliberadamente conservador.
 
+**Dashboard en tiempo real:** al arrancar, `pump_sniper.py` levanta un
+servidor web de solo lectura en `PUERTO_DASHBOARD` (default `8080`) --
+`http://localhost:8080` muestra el saldo (real o ficticio), el precio
+SOL/USD, los candidatos en ventana de filtro, las posiciones abiertas con
+su multiplo actual, y el historial de operaciones cerradas, todo
+actualizandose solo cada 1.5s. En GitHub Codespaces no hace falta
+configurar nada: el puerto se reenvia automaticamente, aparece un aviso
+o se ve en la pestaña `PORTS` con un link para abrirlo en el navegador.
+El dashboard no controla nada del bot, solo lee su estado.
+
 **Salida event-driven, no por polling:** la condicion de salida se evalua
 en el mismo instante en que llega el dato de precio de un trade nuevo, no
 en el siguiente chequeo periodico. El barrido de fondo (cada 0.5s) es solo

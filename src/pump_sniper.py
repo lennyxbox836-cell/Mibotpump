@@ -17,6 +17,7 @@ USA DINERO REAL cuando DRY_RUN = False. Empeza con montos chicos.
 """
 
 import asyncio
+import collections
 import json
 import sys
 import time
@@ -27,6 +28,7 @@ try:
 except ImportError:
     sys.exit("Falta la libreria. Instala con:  pip install -r requirements.txt")
 
+import dashboard
 import pump_trader
 
 WS_URL = "wss://pumpportal.fun/api/data"
@@ -60,6 +62,9 @@ MIN_MUESTRAS_KELLY   = 10     # con menos operaciones cerradas, el estimado de K
 APUESTA_INICIAL_PCT  = 0.02   # tamano fijo usado mientras no hay suficientes muestras
 FRICCION_PCT         = 0.03   # estimado de slippage + fees ida y vuelta, se resta del retorno simulado
 SOL_USD_FALLBACK     = 150.0  # se usa si falla la consulta de precio en vivo
+
+PUERTO_DASHBOARD = 8080   # dashboard web de solo lectura en http://localhost:<puerto>
+HISTORIAL_MAX    = 100    # cantidad de operaciones cerradas que se guardan para el dashboard
 # -----------------------------------------------
 
 
@@ -203,6 +208,7 @@ class Bot:
         self._tareas = set()
         self.precio_sol_usd = SOL_USD_FALLBACK
         self.billetera = BilleteraSimulada(SALDO_FICTICIO_INICIAL_USD) if DRY_RUN else None
+        self.historial = collections.deque(maxlen=HISTORIAL_MAX)
 
     def _lanzar(self, coro):
         tarea = asyncio.create_task(coro)
@@ -282,17 +288,43 @@ class Bot:
             self.posiciones[mint] = pos
             return
 
+        pnl_usd = None
         if self.billetera and pos.apuesta_usd is not None:
             multiplo_neto = pos.multiplo * (1 - FRICCION_PCT)
-            pnl = self.billetera.cerrar_operacion(pos.apuesta_usd, multiplo_neto)
-            log(f"    [SIMULADO] PnL ${pnl:+.2f} -- saldo ficticio ${self.billetera.saldo_usd:.2f} "
+            pnl_usd = self.billetera.cerrar_operacion(pos.apuesta_usd, multiplo_neto)
+            log(f"    [SIMULADO] PnL ${pnl_usd:+.2f} -- saldo ficticio ${self.billetera.saldo_usd:.2f} "
                 f"({len(self.billetera.resultados)} operaciones)")
+
+        self.historial.append({
+            "t": time.time(), "simbolo": pos.simbolo, "razon": razon,
+            "multiplo": round(pos.multiplo, 3), "pnl_usd": round(pnl_usd, 2) if pnl_usd is not None else None,
+        })
 
         if self.ws:
             try:
                 await self.ws.send(json.dumps({"method": "unsubscribeTokenTrade", "keys": [mint]}))
             except Exception:
                 pass
+
+    def estado(self):
+        """Snapshot para el dashboard web. Solo lectura, no muta nada."""
+        return {
+            "dry_run": DRY_RUN,
+            "wallet": str(self.wallet.pubkey()),
+            "precio_sol_usd": self.precio_sol_usd,
+            "saldo_ficticio": self.billetera.saldo_usd if self.billetera else None,
+            "operaciones_simuladas": len(self.billetera.resultados) if self.billetera else None,
+            "kelly_pct": self.billetera.kelly_fraccionario() * 100 if self.billetera else None,
+            "candidatos_en_ventana": [
+                {"simbolo": c.simbolo, "mint": c.mint, "edad": round(c.edad, 1), "traders": len(c.traders)}
+                for c in self.candidatos.values()
+            ],
+            "posiciones_abiertas": [
+                {"simbolo": p.simbolo, "mint": p.mint, "multiplo": round(p.multiplo, 3), "edad": round(p.edad, 1)}
+                for p in self.posiciones.values()
+            ],
+            "historial": list(self.historial)[::-1],
+        }
 
     async def barrer(self):
         while True:
@@ -372,6 +404,8 @@ async def main():
         log(f"precio SOL/USD: ${bot.precio_sol_usd:.2f} "
             f"{'(en vivo)' if precio else '(fallback, no se pudo consultar)'}")
         log(f"saldo ficticio inicial: ${bot.billetera.saldo_usd:.2f}")
+
+    await dashboard.iniciar(bot, PUERTO_DASHBOARD, log=log)
 
     log(f"Conectando a {WS_URL}")
     async for ws in websockets.connect(WS_URL, ping_interval=20, ping_timeout=20):
