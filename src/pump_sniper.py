@@ -74,6 +74,7 @@ KELLY_FRACCION       = 0.5    # medio-Kelly: Kelly completo apuesta demasiado en
 MAX_KELLY_PCT        = 0.20   # tope duro, nunca mas del 20% del saldo ficticio en una sola operacion
 MIN_MUESTRAS_KELLY   = 10     # con menos operaciones cerradas, el estimado de Kelly no es confiable
 APUESTA_INICIAL_PCT  = 0.02   # tamano fijo usado mientras no hay suficientes muestras
+APUESTA_MINIMA_USD   = 1.0    # piso: nunca apostar menos que esto (si el saldo ficticio alcanza)
 FRICCION_PCT         = 0.03   # estimado de slippage + fees ida y vuelta, se resta del retorno simulado
 SOL_USD_FALLBACK     = 150.0  # se usa si falla la consulta de precio en vivo
 
@@ -166,7 +167,9 @@ class BilleteraSimulada:
     def tamano_apuesta_usd(self):
         if self.saldo_usd <= 0:
             return 0.0
-        return self.saldo_usd * self.kelly_fraccionario()
+        monto = self.saldo_usd * self.kelly_fraccionario()
+        piso = min(APUESTA_MINIMA_USD, self.saldo_usd)  # no apostar mas de lo que hay
+        return max(monto, piso)
 
     def cerrar_operacion(self, apuesta_usd, multiplo_neto):
         pnl = apuesta_usd * (multiplo_neto - 1)
