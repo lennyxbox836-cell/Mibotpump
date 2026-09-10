@@ -179,6 +179,17 @@ mas en esto que cualquier ajuste de codigo.
 
 ### Uso
 
+Para probar en `DRY_RUN` (default), **`SOLANA_PRIVATE_KEY` es opcional**:
+si falta o esta mal escrita, el bot genera una wallet temporal solo para
+poder simular y arranca igual (avisa en el log que lo hizo).
+
+```bash
+python src/pump_sniper.py
+```
+
+Cuando quieras pasar a modo real (`DRY_RUN = False`), ahi si es
+obligatoria una clave valida con fondos:
+
 ```bash
 export SOLANA_PRIVATE_KEY='tu_clave_privada_base58'   # nunca la escribas en el codigo
 export SOLANA_RPC_URL='https://tu-rpc-rapido.com'      # opcional, usa uno publico por defecto

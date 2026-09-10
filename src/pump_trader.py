@@ -23,17 +23,36 @@ TRADE_LOCAL_URL = "https://pumpportal.fun/api/trade-local"
 RPC_URL = os.environ.get("SOLANA_RPC_URL", "https://api.mainnet-beta.solana.com")
 
 
-def cargar_wallet() -> Keypair:
-    clave = os.environ.get("SOLANA_PRIVATE_KEY")
+def cargar_wallet(dry_run=False) -> Keypair:
+    """
+    En DRY_RUN, la clave no se usa para nada real (no firma ni manda
+    transacciones), asi que si falta o esta mal se genera una wallet
+    temporal para no bloquear la simulacion. En modo real (dry_run=False)
+    esto SIEMPRE exige una clave valida -- no hay temporal para eso.
+    """
+    clave = os.environ.get("SOLANA_PRIVATE_KEY", "").strip()
+
     if not clave:
+        if dry_run:
+            temporal = Keypair()
+            print("Aviso: no hay SOLANA_PRIVATE_KEY configurada. Como DRY_RUN esta "
+                  f"activo, se genera una wallet temporal ({temporal.pubkey()}) solo "
+                  "para poder simular -- no tiene fondos ni sirve para operar en real.")
+            return temporal
         sys.exit(
             "Falta SOLANA_PRIVATE_KEY. Exportala antes de correr el bot:\n"
             "  export SOLANA_PRIVATE_KEY='tu_clave_privada_base58'\n"
             "Nunca la pongas en el codigo ni la commitees."
         )
+
     try:
-        return Keypair.from_base58_string(clave.strip())
+        return Keypair.from_base58_string(clave)
     except Exception as e:
+        if dry_run:
+            temporal = Keypair()
+            print(f"Aviso: SOLANA_PRIVATE_KEY invalida ({e}). Como DRY_RUN esta activo, "
+                  f"se genera una wallet temporal ({temporal.pubkey()}) para poder simular.")
+            return temporal
         sys.exit(f"SOLANA_PRIVATE_KEY invalida: {e}")
 
 

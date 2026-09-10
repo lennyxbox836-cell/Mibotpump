@@ -10,8 +10,10 @@ significa comprar despues de la caida. Aca el filtro es minimo mientras
 se compra rapido, y la proteccion pasa a la SALIDA: take-profit,
 stop-loss y un tiempo maximo de holdeo, lo que se cumpla primero.
 
-Requiere SOLANA_PRIVATE_KEY en el entorno. Por defecto corre en DRY_RUN
-(no manda transacciones reales) hasta que lo desactives a proposito.
+En DRY_RUN (el default) no hace falta SOLANA_PRIVATE_KEY -- si falta o
+esta mal, se genera una wallet temporal solo para poder simular. En modo
+real (DRY_RUN = False) si es obligatoria y tiene que ser una clave valida
+con fondos.
 
 USA DINERO REAL cuando DRY_RUN = False. Empeza con montos chicos.
 """
@@ -390,7 +392,7 @@ async def main():
     else:
         log("=== DRY_RUN desactivado: este bot va a gastar SOL real ===")
 
-    wallet = pump_trader.cargar_wallet()
+    wallet = pump_trader.cargar_wallet(dry_run=DRY_RUN)
     log(f"wallet: {wallet.pubkey()}")
 
     bot = Bot(wallet)
