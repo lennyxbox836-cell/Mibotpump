@@ -128,6 +128,36 @@ se ve exactamente igual que el problema original: candidatos con 0
 traders, sin ningun error). Es opcional; sin esta variable el bot
 funciona igual, solo que sin ese aviso preventivo.
 
+### Alternativa gratis: PUMPDEV_KEY (experimental, sin verificar)
+
+Existe un proveedor alternativo, `pumpdev.io`, que segun su propia
+publicidad da streaming en vivo gratis. Si tenes una key de ahi:
+
+```bash
+export PUMPDEV_KEY='tu_key_de_pumpdev'
+```
+
+Si esta seteada, tiene prioridad sobre `PUMPPORTAL_API_KEY` -- el bot se
+conecta a `wss://pumpdev.io/ws` en vez de a PumpPortal.
+
+**Ojo:** a diferencia de PumpPortal (documentado y usado en muchos
+tutoriales/SDKs de terceros, con protocolo de suscripcion conocido),
+`pumpdev.io` todavia no esta verificado contra el formato de eventos que
+este bot espera (`mint`, `traderPublicKey`, `txType`, etc.) ni contra su
+protocolo de suscripcion -- por eso, cuando se usa `PUMPDEV_KEY`, el bot
+**no manda ningun mensaje de suscripcion**, solo escucha lo que llegue.
+Para ver que esta llegando de verdad, sumale:
+
+```bash
+export PUMP_DEBUG=1
+```
+
+Con las dos seteadas, los primeros 25 mensajes crudos que lleguen se
+imprimen tal cual en el log (`[DEBUG 1/25] {...}`) antes de que el bot
+intente interpretarlos. Hasta no confirmar los nombres de campo reales,
+el filtro/copy-trading/ranking pueden no funcionar aunque los datos SI
+esten llegando -- es un problema de interpretacion, no de conexion.
+
 ---
 
 `pump_scanner.py` espera 300s para juntar suficientes datos y evitar

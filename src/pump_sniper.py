@@ -55,7 +55,29 @@ WS_URL_BASE = "wss://pumpportal.fun/api/data"
 # PumpPortal" para como conseguirla (wallet separada de SOLANA_PRIVATE_KEY,
 # esta es solo para pagar el streaming de datos).
 PUMPPORTAL_API_KEY = os.environ.get("PUMPPORTAL_API_KEY", "").strip()
-WS_URL = f"{WS_URL_BASE}?api-key={PUMPPORTAL_API_KEY}" if PUMPPORTAL_API_KEY else WS_URL_BASE
+
+# PUMPDEV_KEY: proveedor alternativo gratis (pumpdev.io). No verificado
+# todavia contra el formato de eventos que espera este bot -- por eso
+# PUMP_DEBUG existe (ver mas abajo), para poder ver los mensajes crudos
+# la primera vez que se usa y ajustar el parser si hace falta. Si esta
+# seteada, tiene prioridad sobre PUMPPORTAL_API_KEY.
+PUMPDEV_KEY = os.environ.get("PUMPDEV_KEY", "").strip()
+
+# PUMP_DEBUG=1 -- loguea los primeros mensajes crudos (JSON tal cual
+# llegan) antes de intentar interpretarlos. Util para diagnosticar un
+# proveedor nuevo, o para confirmar que algo especifico esta llegando.
+PUMP_DEBUG = os.environ.get("PUMP_DEBUG", "").strip().lower() in ("1", "true", "si", "yes")
+PUMP_DEBUG_MAX_MENSAJES = 25
+
+if PUMPDEV_KEY:
+    WS_URL = f"wss://pumpdev.io/ws?key={PUMPDEV_KEY}"
+    PROVEEDOR = "pumpdev.io"
+elif PUMPPORTAL_API_KEY:
+    WS_URL = f"{WS_URL_BASE}?api-key={PUMPPORTAL_API_KEY}"
+    PROVEEDOR = "PumpPortal (con key)"
+else:
+    WS_URL = WS_URL_BASE
+    PROVEEDOR = "PumpPortal (sin key -- solo tokens nuevos, sin trades reales)"
 
 # Direccion publica de la wallet de PumpPortal (la del create-wallet, la
 # que paga el streaming) -- opcional, solo para que el bot te avise si se
@@ -395,7 +417,7 @@ class Bot:
             "multiplo": round(pos.multiplo, 3), "pnl_usd": round(pnl_usd, 2) if pnl_usd is not None else None,
         })
 
-        if self.ws:
+        if self.ws and not PUMPDEV_KEY:
             try:
                 await self.ws.send(json.dumps({"method": "unsubscribeTokenTrade", "keys": [mint]}))
             except Exception:
@@ -453,7 +475,7 @@ class Bot:
                     self._lanzar(self.comprar(cand.mint, cand.simbolo, cand.mcap))
                 else:
                     log(f"descartado {cand.simbolo}: {motivo}")
-                    if self.ws:
+                    if self.ws and not PUMPDEV_KEY:
                         try:
                             await self.ws.send(json.dumps({"method": "unsubscribeTokenTrade", "keys": [mint]}))
                         except Exception:
@@ -549,14 +571,19 @@ async def main():
     else:
         log("=== DRY_RUN desactivado: este bot va a gastar SOL real ===")
 
-    if not PUMPPORTAL_API_KEY:
-        log("AVISO: no hay PUMPPORTAL_API_KEY configurada. subscribeNewToken sigue "
-            "funcionando gratis (vas a ver tokens nuevos aparecer), pero "
-            "subscribeTokenTrade/subscribeAccountTrade NO van a traer datos reales -- "
-            "los candidatos se van a quedar en 0 traders para siempre y el bot nunca "
-            "va a comprar nada por el filtro propio ni por copy-trading. Ver README, "
-            "seccion 'API key de PumpPortal', para conseguirla (es gratis de generar, "
-            "solo hace falta cargarle SOL a esa wallet separada).")
+    log(f"proveedor de datos: {PROVEEDOR}")
+    if PUMPDEV_KEY:
+        log("AVISO: pumpdev.io todavia no esta verificado contra el formato que este "
+            "bot espera. Con PUMP_DEBUG=1 vas a ver los mensajes crudos apenas lleguen "
+            "-- mandamelos para confirmar los nombres de campo y ajustar el parser si "
+            "hace falta. Mientras tanto, el filtro/copy-trading pueden no funcionar "
+            "aunque los datos SI esten llegando.")
+    elif not PUMPPORTAL_API_KEY:
+        log("AVISO: no hay PUMPPORTAL_API_KEY ni PUMPDEV_KEY configuradas. subscribeNewToken "
+            "sigue funcionando gratis (vas a ver tokens nuevos aparecer), pero no va a "
+            "llegar ningun trade real -- los candidatos se van a quedar en 0 traders "
+            "para siempre y el bot nunca va a comprar nada por el filtro propio ni por "
+            "copy-trading. Ver README para las opciones.")
 
     wallet = pump_trader.cargar_wallet(dry_run=DRY_RUN)
     log(f"wallet: {wallet.pubkey()}")
@@ -580,29 +607,40 @@ async def main():
         log(f"vigilando saldo de la wallet de streaming de PumpPortal cada "
             f"{PUMPPORTAL_CHEQUEO_SALDO_SEG}s")
 
-    log(f"Conectando a {WS_URL}")
+    log(f"Conectando a {WS_URL.split('?')[0]} (parametros ocultos del log)")
+    mensajes_debug_mostrados = 0
     async for ws in websockets.connect(WS_URL, ping_interval=20, ping_timeout=20):
         try:
             bot.ws = ws
-            await ws.send(json.dumps({"method": "subscribeNewToken"}))
-            log("Suscrito a tokens nuevos.")
-            if bot.wallets_seguidas:
-                await ws.send(json.dumps({"method": "subscribeAccountTrade", "keys": list(bot.wallets_seguidas)}))
-                cortos = ", ".join(w[:4] + ".." + w[-4:] for w in bot.wallets_seguidas)
-                log(f"Copiando trades de: {cortos}")
+            if not PUMPDEV_KEY:
+                # Protocolo de suscripcion de PumpPortal -- no se manda a
+                # pumpdev.io porque no esta confirmado que use el mismo.
+                await ws.send(json.dumps({"method": "subscribeNewToken"}))
+                log("Suscrito a tokens nuevos.")
+                if bot.wallets_seguidas:
+                    await ws.send(json.dumps({"method": "subscribeAccountTrade", "keys": list(bot.wallets_seguidas)}))
+                    cortos = ", ".join(w[:4] + ".." + w[-4:] for w in bot.wallets_seguidas)
+                    log(f"Copiando trades de: {cortos}")
+            else:
+                log("pumpdev.io: escuchando sin enviar suscripciones (protocolo no confirmado).")
             log("Ctrl+C para salir.\n")
 
             tarea_barrido = asyncio.create_task(bot.barrer())
             try:
                 while True:
                     raw = await ws.recv()
+
+                    if PUMP_DEBUG and mensajes_debug_mostrados < PUMP_DEBUG_MAX_MENSAJES:
+                        mensajes_debug_mostrados += 1
+                        log(f"[DEBUG {mensajes_debug_mostrados}/{PUMP_DEBUG_MAX_MENSAJES}] {raw[:500]}")
+
                     try:
                         d = json.loads(raw)
                     except json.JSONDecodeError:
                         continue
 
                     mint_a_suscribir = bot.procesar_evento(d)
-                    if mint_a_suscribir:
+                    if mint_a_suscribir and not PUMPDEV_KEY:
                         await ws.send(json.dumps(
                             {"method": "subscribeTokenTrade", "keys": [mint_a_suscribir]}))
             finally:
