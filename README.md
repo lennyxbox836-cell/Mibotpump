@@ -85,6 +85,37 @@ del script, es la tasa base del mercado que esta midiendo.
 
 ## pump_sniper.py - compra y venta automatica
 
+### API key de PumpPortal (requisito para que el filtro funcione)
+
+Sin esto, el bot arranca y corre sin errores, pero **nunca va a comprar
+nada**: se va a quedar viendo candidatos con 0 traders para siempre. No
+es un bug -- PumpPortal cobra por los streams de trades reales
+(`subscribeTokenTrade`, `subscribeAccountTrade`), a diferencia de
+`subscribeNewToken` (deteccion de tokens nuevos) que es gratis. Sin API
+key, esos dos streams no entregan datos y el filtro se queda ciego.
+
+Es una **wallet y una clave separadas de tu `SOLANA_PRIVATE_KEY`** --
+esta otra solo paga el streaming de datos (0.01 SOL cada 10.000 eventos),
+nunca la usa este bot para comprar ni firmar nada.
+
+1. Generar la wallet + API key (gratis, solo con un GET):
+   ```bash
+   curl -s https://pumpportal.fun/api/create-wallet
+   ```
+   Devuelve un JSON con `apiKey`, `walletPublicKey` y `privateKey`.
+   **Guardá el `privateKey` en ese momento -- no se vuelve a mostrar.**
+2. Mandarle SOL a `walletPublicKey` (0.02 SOL alcanza para arrancar, es
+   solo para pagar el streaming, no para operar).
+3. Exportar la key:
+   ```bash
+   export PUMPPORTAL_API_KEY='el_apiKey_del_paso_1'
+   ```
+
+Sin `PUMPPORTAL_API_KEY` seteada, el bot ahora **avisa explicitamente**
+en el log al arrancar en vez de fallar en silencio.
+
+---
+
 `pump_scanner.py` espera 300s para juntar suficientes datos y evitar
 tokens sin salida, pero en pump.fun la mayoria de los tokens pumpean y
 caen dentro del primer minuto: para cuando termina esa ventana, la

@@ -43,7 +43,19 @@ except ImportError:
 import dashboard
 import pump_trader
 
-WS_URL = "wss://pumpportal.fun/api/data"
+WS_URL_BASE = "wss://pumpportal.fun/api/data"
+
+# subscribeTokenTrade y subscribeAccountTrade (los que traen traders/ventas
+# reales, no solo "se creo un token") estan medidos por PumpPortal: hace
+# falta una API key vinculada a una wallet de ellos con SOL cargado
+# (0.01 SOL cada 10000 eventos). Sin esto, subscribeNewToken sigue andando
+# gratis (por eso se ven tokens nuevos aparecer), pero NUNCA llega un solo
+# trade real -- el filtro se queda en 0 traders para siempre y nunca
+# compra nada, sin ningun error visible. Ver README, seccion "API key de
+# PumpPortal" para como conseguirla (wallet separada de SOLANA_PRIVATE_KEY,
+# esta es solo para pagar el streaming de datos).
+PUMPPORTAL_API_KEY = os.environ.get("PUMPPORTAL_API_KEY", "").strip()
+WS_URL = f"{WS_URL_BASE}?api-key={PUMPPORTAL_API_KEY}" if PUMPPORTAL_API_KEY else WS_URL_BASE
 
 # ---------------- CONFIGURACION ----------------
 # DRY_RUN se define por la variable de entorno PUMP_LIVE (ver docstring
@@ -509,6 +521,15 @@ async def main():
         log("=== DRY_RUN activo: no se va a mandar NINGUNA transaccion real ===")
     else:
         log("=== DRY_RUN desactivado: este bot va a gastar SOL real ===")
+
+    if not PUMPPORTAL_API_KEY:
+        log("AVISO: no hay PUMPPORTAL_API_KEY configurada. subscribeNewToken sigue "
+            "funcionando gratis (vas a ver tokens nuevos aparecer), pero "
+            "subscribeTokenTrade/subscribeAccountTrade NO van a traer datos reales -- "
+            "los candidatos se van a quedar en 0 traders para siempre y el bot nunca "
+            "va a comprar nada por el filtro propio ni por copy-trading. Ver README, "
+            "seccion 'API key de PumpPortal', para conseguirla (es gratis de generar, "
+            "solo hace falta cargarle SOL a esa wallet separada).")
 
     wallet = pump_trader.cargar_wallet(dry_run=DRY_RUN)
     log(f"wallet: {wallet.pubkey()}")
