@@ -79,6 +79,10 @@ PERDIDA_MAX_SESION_SOL  = 0.5   # circuit breaker: si el balance cae esto desde 
 
 MAX_CANDIDATOS_VIVOS = 300
 
+# --- ranking de wallets observadas (para encontrar a quien copiar) ---
+MAX_WALLETS_RASTREADAS  = 5000  # limite de memoria, se descartan las mas viejas
+MIN_OPERACIONES_RANKING = 3     # ciclos completos (compra->venta) minimos para entrar al ranking
+
 # --- saldo ficticio + Kelly (SOLO afecta el dimensionamiento en DRY_RUN) ---
 SALDO_FICTICIO_INICIAL_USD = 25.0
 KELLY_FRACCION       = 0.5    # medio-Kelly: Kelly completo apuesta demasiado en un mercado de colas gordas como este
@@ -137,6 +141,44 @@ class Candidato:
         if conc > MAX_CONCENTRACION:
             return False, f"concentracion {conc*100:.0f}%"
         return True, None
+
+
+class ActividadWallet:
+    """
+    Estadisticas de una wallet armadas en vivo a partir del mismo feed de
+    trades que el bot ya recibe -- no es una fuente de datos historica
+    aparte, asi que solo ve lo que el bot mismo observa mientras corre
+    (sobre todo los primeros segundos de cada token nuevo, mas la vida
+    completa de lo que el bot compra o copia). Tarda en juntar muestra.
+
+    Un ciclo se da por cerrado cuando el propio evento de trade reporta
+    "newTokenBalance" en ~0 para esa wallet en ese mint -- ahi se registra
+    el SOL neto acumulado de ese ciclo (compras restan, ventas suman).
+    """
+
+    def __init__(self):
+        self.t0 = time.time()
+        self.sol_neto_por_mint = {}
+        self.operaciones_cerradas = []  # SOL neto de cada ciclo cerrado (positivo = gano)
+        self.volumen_total_sol = 0.0
+
+    def registrar(self, mint, tipo, sol, nuevo_balance_tokens):
+        self.volumen_total_sol += sol
+        neto = self.sol_neto_por_mint.get(mint, 0.0) + (-sol if tipo == "buy" else sol)
+        if nuevo_balance_tokens is not None and abs(nuevo_balance_tokens) < 1e-3:
+            self.operaciones_cerradas.append(neto)
+            self.sol_neto_por_mint.pop(mint, None)
+        else:
+            self.sol_neto_por_mint[mint] = neto
+
+    @property
+    def pnl_sol(self):
+        return sum(self.operaciones_cerradas)
+
+    @property
+    def tasa_acierto(self):
+        n = len(self.operaciones_cerradas)
+        return sum(1 for x in self.operaciones_cerradas if x > 0) / n if n else 0.0
 
 
 class BilleteraSimulada:
@@ -239,6 +281,7 @@ class Bot:
         self.billetera = BilleteraSimulada(SALDO_FICTICIO_INICIAL_USD) if DRY_RUN else None
         self.historial = collections.deque(maxlen=HISTORIAL_MAX)
         self.wallets_seguidas = set(WALLETS_SEGUIDAS)
+        self.actividad_wallets = {}
 
     def _lanzar(self, coro):
         tarea = asyncio.create_task(coro)
@@ -358,7 +401,26 @@ class Bot:
             ],
             "historial": list(self.historial)[::-1],
             "wallets_seguidas": [w[:4] + ".." + w[-4:] for w in self.wallets_seguidas],
+            "wallets_rastreadas": len(self.actividad_wallets),
+            "top_wallets": self.top_wallets(),
         }
+
+    def top_wallets(self, n=10):
+        candidatas = [
+            (w, act) for w, act in self.actividad_wallets.items()
+            if len(act.operaciones_cerradas) >= MIN_OPERACIONES_RANKING
+        ]
+        candidatas.sort(key=lambda item: item[1].pnl_sol, reverse=True)
+        return [
+            {
+                "wallet": w,
+                "pnl_sol": round(act.pnl_sol, 4),
+                "operaciones": len(act.operaciones_cerradas),
+                "tasa_acierto": round(act.tasa_acierto * 100, 1),
+                "volumen_sol": round(act.volumen_total_sol, 2),
+            }
+            for w, act in candidatas[:n]
+        ]
 
     async def barrer(self):
         while True:
@@ -405,6 +467,17 @@ class Bot:
         sol = float(d.get("solAmount", 0) or 0)
         mcap = d.get("marketCapSol")
         tipo = "sell" if d.get("txType") == "sell" else "buy"
+
+        # Ranking de wallets: corre para TODOS los trades que vemos, sin
+        # importar el resto de la logica de abajo (filtro propio o copy).
+        if wallet:
+            act = self.actividad_wallets.get(wallet)
+            if act is None:
+                if len(self.actividad_wallets) >= MAX_WALLETS_RASTREADAS:
+                    mas_vieja = min(self.actividad_wallets, key=lambda w: self.actividad_wallets[w].t0)
+                    self.actividad_wallets.pop(mas_vieja, None)
+                act = self.actividad_wallets[wallet] = ActividadWallet()
+            act.registrar(mint, tipo, sol, d.get("newTokenBalance"))
 
         # Senal de copy-trading: tiene prioridad sobre el filtro propio.
         if wallet in self.wallets_seguidas:

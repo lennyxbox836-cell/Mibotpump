@@ -52,6 +52,10 @@ PAGINA = """<!doctype html>
   <h2>Historial reciente</h2>
   <div id="historial"></div>
 
+  <h2>Wallets mas rentables observadas (para copiar)</h2>
+  <div class="sub" id="wallets-rastreadas-info"></div>
+  <div id="top-wallets"></div>
+
 <script>
 function fmt(n, d=2) { return (n === null || n === undefined) ? "-" : Number(n).toFixed(d); }
 
@@ -98,6 +102,13 @@ async function actualizar() {
   wSeguidas.textContent = r.wallets_seguidas.length
     ? "Copiando: " + r.wallets_seguidas.join(", ")
     : "No se esta copiando a ninguna wallet (PUMP_COPY_WALLETS vacio)";
+
+  document.getElementById("wallets-rastreadas-info").textContent =
+    r.wallets_rastreadas + " wallets observadas hasta ahora -- entran al ranking con 3+ operaciones cerradas";
+  document.getElementById("top-wallets").innerHTML = tabla(
+    ["Wallet (completa, para copiar)", "PnL (SOL)", "Operaciones", "Tasa acierto", "Volumen (SOL)"],
+    r.top_wallets.map(w => [w.wallet, signoSol(w.pnl_sol), w.operaciones, fmt(w.tasa_acierto,0) + "%", fmt(w.volumen_sol)])
+  );
 }
 
 function stat(l, v) {
@@ -111,6 +122,10 @@ function claseMultiplo(m) {
 function signo(v) {
   const cls = v >= 0 ? "pos" : "neg";
   return `<span class="${cls}">${v >= 0 ? "+" : ""}$${fmt(v)}</span>`;
+}
+function signoSol(v) {
+  const cls = v >= 0 ? "pos" : "neg";
+  return `<span class="${cls}">${v >= 0 ? "+" : ""}${fmt(v,4)} SOL</span>`;
 }
 function tabla(cabeceras, filas) {
   if (!filas.length) return '<div class="vacio">nada por ahora</div>';

@@ -141,6 +141,25 @@ puede mover el precio en tu contra antes de que tu compra confirme). Sin
 `PUMP_COPY_WALLETS` seteada (default), esto no hace nada -- se usa
 unicamente el filtro propio, como antes.
 
+**Ranking de wallets rentables (para decidir a quien copiar):** el bot
+arma solo, en vivo, una tabla de las wallets mas rentables que fue
+observando -- se ve en el dashboard, seccion "Wallets mas rentables
+observadas". No es un scan del historial completo de pump.fun ni usa
+ninguna fuente externa: se arma exclusivamente con los trades que el
+bot mismo va viendo mientras corre (sobre todo los primeros segundos de
+cada token nuevo, mas la vida completa de lo que compra o copia), asi
+que tarda en juntar muestra y solo ve una porcion del mercado real.
+
+Una wallet entra al ranking cuando el bot observa que **cierra un ciclo
+completo** en un mint (compra y despues vende hasta volver a 0 tokens) --
+ahi se calcula el SOL neto de ese ciclo a partir de los montos reales de
+las transacciones, sin estimaciones. Con menos de `MIN_OPERACIONES_RANKING`
+(3) ciclos cerrados observados, la wallet no aparece -- muy poca muestra
+para decir nada. La tabla no agrega nada a `PUMP_COPY_WALLETS`
+automaticamente: muestra la direccion completa para que la copies vos a
+mano si te parece que vale la pena, con el mismo ojo critico que cualquier
+otra wallet que decidas seguir.
+
 **Circuit breaker:** si el balance de la wallet cae mas de
 `PERDIDA_MAX_SESION_SOL` desde el inicio de la sesion, el bot deja de
 abrir posiciones nuevas (las que ya estan abiertas se siguen manejando).
