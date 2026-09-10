@@ -51,7 +51,12 @@ WS_URL = "wss://pumpportal.fun/api/data"
 DRY_RUN = os.environ.get("PUMP_LIVE", "").strip().lower() not in ("1", "true", "si", "yes")
 
 FILTRO_RAPIDO_SEG   = 8      # ventana de observacion antes de decidir comprar
-MIN_TRADERS_RAPIDO  = 5      # wallets unicas minimas en esa ventana
+# PUMP_MIN_TRADERS permite relajar el filtro sin editar el codigo (por
+# ejemplo para ver la mecanica de compra/venta funcionar mas seguido en
+# DRY_RUN). El default (5) es el valor pensado para juzgar la estrategia
+# de verdad -- un valor bajo compra en tokens con poca o ninguna
+# participacion real, que es justamente lo que este filtro busca evitar.
+MIN_TRADERS_RAPIDO  = int(os.environ.get("PUMP_MIN_TRADERS", "5"))
 MAX_CONCENTRACION   = 0.5    # % maximo del volumen inicial en una sola wallet
 
 SOL_POR_COMPRA       = 0.02  # SOL que arriesga cada compra

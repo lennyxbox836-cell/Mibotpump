@@ -210,6 +210,20 @@ cualquier otro valor), corre en modo simulado sin importar si la clave
 esta seteada o no. Para volver a simulado despues de haber operado real,
 alcanza con `unset PUMP_LIVE` (o `export PUMP_LIVE=0`) en esa terminal.
 
+**Para ver la mecanica de compra/venta funcionar mas seguido** (en vez de
+solo descartes) sin editar el codigo, bajar el filtro de traders con
+`PUMP_MIN_TRADERS`:
+
+```bash
+PUMP_MIN_TRADERS=1 python pump_sniper.py
+```
+
+Esto compra en tokens con muy poca o ninguna participacion real -- sirve
+para ver el dashboard funcionando de punta a punta, pero **no** para
+juzgar si la estrategia es buena: con el filtro relajado se compra
+literalmente lo que el filtro de 5 traders existe para evitar. Sin la
+variable (o con cualquier otro numero), sigue en 5 como siempre.
+
 ### Configuracion
 
 Todos los parametros estan al inicio de `src/pump_sniper.py`. `DRY_RUN`
@@ -219,7 +233,7 @@ en particular NO se edita a mano ahi -- se define solo a partir de
 ```python
 DRY_RUN = ...                   # NO tocar: sale de la env var PUMP_LIVE
 FILTRO_RAPIDO_SEG   = 8
-MIN_TRADERS_RAPIDO  = 5
+MIN_TRADERS_RAPIDO  = 5          # override: env var PUMP_MIN_TRADERS
 MAX_CONCENTRACION   = 0.5
 SOL_POR_COMPRA       = 0.02
 SLIPPAGE_PCT         = 20
