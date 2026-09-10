@@ -119,6 +119,31 @@ en una wallet de ellos -- y **no se usa** en este bot a proposito.)
 `PERDIDA_MAX_SESION_SOL` desde el inicio de la sesion, el bot deja de
 abrir posiciones nuevas (las que ya estan abiertas se siguen manejando).
 
+**Saldo ficticio con Kelly (solo en DRY_RUN):** en modo simulacion, el bot
+arranca con `SALDO_FICTICIO_INICIAL_USD` (default $25) y dimensiona cada
+operacion simulada con el [criterio de Kelly](https://es.wikipedia.org/wiki/Criterio_de_Kelly),
+calculado con la tasa de acierto y el ratio ganancia/perdida de las
+propias operaciones simuladas de esa sesion -- no es un numero inventado,
+pero tampoco confiable con pocas muestras. Por eso:
+
+- Con menos de `MIN_MUESTRAS_KELLY` (10) operaciones cerradas, usa un
+  tamano fijo chico (`APUESTA_INICIAL_PCT`, 2% del saldo) en vez de Kelly.
+- A partir de ahi, aplica **medio-Kelly** (`KELLY_FRACCION = 0.5`) con un
+  tope duro de `MAX_KELLY_PCT` (20% del saldo por operacion).
+- Se resta `FRICCION_PCT` (3%) del retorno simulado de cada operacion, como
+  estimado grosero de slippage + fees ida y vuelta.
+
+Esto es **para ver como se comporta el crecimiento del saldo con
+dimensionamiento dinamico antes de arriesgar plata real**, no una
+recomendacion de sizing para produccion. El Kelly "de libro" asume una
+distribucion de retornos razonablemente bien comportada; pump.fun es lo
+opuesto (la mayoria pierde casi todo, pocos ganan mucho), asi que incluso
+con la fraccion y el tope aplicados, un estimado de `p` y `b` basado en
+20-30 operaciones puede no sostenerse en las siguientes 200. Pasar esta
+logica a plata real (`DRY_RUN = False`) es una decision aparte que este
+bot no toma sola -- `SOL_POR_COMPRA` en real sigue siendo un monto fijo,
+manual, deliberadamente conservador.
+
 **Salida event-driven, no por polling:** la condicion de salida se evalua
 en el mismo instante en que llega el dato de precio de un trade nuevo, no
 en el siguiente chequeo periodico. El barrido de fondo (cada 0.5s) es solo

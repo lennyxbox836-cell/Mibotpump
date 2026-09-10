@@ -51,6 +51,15 @@ MAX_POSICIONES_ABIERTAS = 3
 PERDIDA_MAX_SESION_SOL  = 0.5   # circuit breaker: si el balance cae esto desde el inicio, dejar de abrir posiciones
 
 MAX_CANDIDATOS_VIVOS = 300
+
+# --- saldo ficticio + Kelly (SOLO afecta el dimensionamiento en DRY_RUN) ---
+SALDO_FICTICIO_INICIAL_USD = 25.0
+KELLY_FRACCION       = 0.5    # medio-Kelly: Kelly completo apuesta demasiado en un mercado de colas gordas como este
+MAX_KELLY_PCT        = 0.20   # tope duro, nunca mas del 20% del saldo ficticio en una sola operacion
+MIN_MUESTRAS_KELLY   = 10     # con menos operaciones cerradas, el estimado de Kelly no es confiable
+APUESTA_INICIAL_PCT  = 0.02   # tamano fijo usado mientras no hay suficientes muestras
+FRICCION_PCT         = 0.03   # estimado de slippage + fees ida y vuelta, se resta del retorno simulado
+SOL_USD_FALLBACK     = 150.0  # se usa si falla la consulta de precio en vivo
 # -----------------------------------------------
 
 
@@ -99,13 +108,62 @@ class Candidato:
         return True, None
 
 
+class BilleteraSimulada:
+    """
+    Saldo ficticio en USD para probar dimensionamiento por Kelly en DRY_RUN,
+    sin arriesgar nada real. Kelly se calcula con la tasa de acierto y el
+    ratio ganancia/perdida de las propias operaciones simuladas de la
+    sesion -- no es un numero inventado, pero tampoco es confiable con
+    pocas muestras, por eso MIN_MUESTRAS_KELLY existe.
+
+    Advertencia: en un mercado de colas gordas como pump.fun (la mayoria
+    pierde casi todo, pocos ganan mucho), el Kelly "de libro" tiende a
+    sobre-apostar porque asume una distribucion mejor comportada que la
+    real. Por eso se aplica KELLY_FRACCION (medio-Kelly) y un tope duro
+    (MAX_KELLY_PCT). Esto es una herramienta de simulacion para ver como
+    se comporta el crecimiento del saldo, no una recomendacion para
+    dimensionar operaciones con plata real.
+    """
+
+    def __init__(self, saldo_inicial_usd):
+        self.saldo_usd = saldo_inicial_usd
+        self.resultados = []  # multiplicadores netos de cada operacion cerrada
+
+    def kelly_fraccionario(self):
+        n = len(self.resultados)
+        if n < MIN_MUESTRAS_KELLY:
+            return APUESTA_INICIAL_PCT
+        ganadoras = [r - 1 for r in self.resultados if r > 1]
+        perdedoras = [1 - r for r in self.resultados if r <= 1]
+        if not ganadoras or not perdedoras:
+            return APUESTA_INICIAL_PCT
+        p = len(ganadoras) / n
+        b = (sum(ganadoras) / len(ganadoras)) / (sum(perdedoras) / len(perdedoras))
+        if b <= 0:
+            return 0.0
+        kelly = max(p - (1 - p) / b, 0.0) * KELLY_FRACCION
+        return min(kelly, MAX_KELLY_PCT)
+
+    def tamano_apuesta_usd(self):
+        if self.saldo_usd <= 0:
+            return 0.0
+        return self.saldo_usd * self.kelly_fraccionario()
+
+    def cerrar_operacion(self, apuesta_usd, multiplo_neto):
+        pnl = apuesta_usd * (multiplo_neto - 1)
+        self.saldo_usd += pnl
+        self.resultados.append(multiplo_neto)
+        return pnl
+
+
 class Posicion:
-    def __init__(self, mint, simbolo, mcap_entrada, sol_invertido):
+    def __init__(self, mint, simbolo, mcap_entrada, sol_invertido, apuesta_usd=None):
         self.mint = mint
         self.simbolo = simbolo
         self.mcap_entrada = mcap_entrada or 1e-9
         self.mcap_actual = self.mcap_entrada
         self.sol_invertido = sol_invertido
+        self.apuesta_usd = apuesta_usd  # solo se usa para liquidar contra la billetera simulada
         self.t_compra = time.time()
 
     @property
@@ -143,6 +201,8 @@ class Bot:
         self.saldo_inicial = None
         self.ws = None
         self._tareas = set()
+        self.precio_sol_usd = SOL_USD_FALLBACK
+        self.billetera = BilleteraSimulada(SALDO_FICTICIO_INICIAL_USD) if DRY_RUN else None
 
     def _lanzar(self, coro):
         tarea = asyncio.create_task(coro)
@@ -177,14 +237,31 @@ class Bot:
             return
         if not await self.circuito_abierto():
             return
+
+        apuesta_usd = None
+        if self.billetera:
+            apuesta_usd = self.billetera.tamano_apuesta_usd()
+            if apuesta_usd <= 0:
+                log("saldo ficticio agotado, no se simulan mas compras")
+                return
+            monto_sol = apuesta_usd / self.precio_sol_usd
+        else:
+            monto_sol = SOL_POR_COMPRA
+
         # Reservar el lugar ANTES de cualquier await: evita que dos compras
         # concurrentes pasen el chequeo de MAX_POSICIONES_ABIERTAS a la vez.
-        self.posiciones[cand.mint] = Posicion(cand.mint, cand.simbolo, cand.mcap, SOL_POR_COMPRA)
-        log(f"COMPRANDO {cand.simbolo} ({cand.mint}) por {SOL_POR_COMPRA} SOL")
+        self.posiciones[cand.mint] = Posicion(cand.mint, cand.simbolo, cand.mcap, monto_sol, apuesta_usd)
+
+        extra = ""
+        if self.billetera:
+            extra = (f" (${apuesta_usd:.2f} ficticios, kelly {self.billetera.kelly_fraccionario()*100:.1f}%, "
+                     f"saldo ${self.billetera.saldo_usd:.2f})")
+        log(f"COMPRANDO {cand.simbolo} ({cand.mint}) por {monto_sol:.4f} SOL{extra}")
+
         loop = asyncio.get_running_loop()
         try:
             await loop.run_in_executor(
-                None, pump_trader.comprar, self.wallet, cand.mint, SOL_POR_COMPRA,
+                None, pump_trader.comprar, self.wallet, cand.mint, monto_sol,
                 SLIPPAGE_PCT, PRIORITY_FEE_SOL, POOL, DRY_RUN)
         except Exception as e:
             log(f"ERROR al comprar {cand.simbolo}: {e}")
@@ -204,6 +281,13 @@ class Bot:
             log(f"ERROR al vender {pos.simbolo}: {e} -- se reintentara con el proximo trade/tick")
             self.posiciones[mint] = pos
             return
+
+        if self.billetera and pos.apuesta_usd is not None:
+            multiplo_neto = pos.multiplo * (1 - FRICCION_PCT)
+            pnl = self.billetera.cerrar_operacion(pos.apuesta_usd, multiplo_neto)
+            log(f"    [SIMULADO] PnL ${pnl:+.2f} -- saldo ficticio ${self.billetera.saldo_usd:.2f} "
+                f"({len(self.billetera.resultados)} operaciones)")
+
         if self.ws:
             try:
                 await self.ws.send(json.dumps({"method": "unsubscribeTokenTrade", "keys": [mint]}))
@@ -279,6 +363,15 @@ async def main():
 
     bot = Bot(wallet)
     await bot.iniciar_saldo()
+
+    if bot.billetera:
+        loop = asyncio.get_running_loop()
+        precio = await loop.run_in_executor(None, pump_trader.obtener_precio_sol_usd)
+        if precio:
+            bot.precio_sol_usd = precio
+        log(f"precio SOL/USD: ${bot.precio_sol_usd:.2f} "
+            f"{'(en vivo)' if precio else '(fallback, no se pudo consultar)'}")
+        log(f"saldo ficticio inicial: ${bot.billetera.saldo_usd:.2f}")
 
     log(f"Conectando a {WS_URL}")
     async for ws in websockets.connect(WS_URL, ping_interval=20, ping_timeout=20):

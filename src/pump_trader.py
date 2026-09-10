@@ -37,6 +37,20 @@ def cargar_wallet() -> Keypair:
         sys.exit(f"SOLANA_PRIVATE_KEY invalida: {e}")
 
 
+def obtener_precio_sol_usd():
+    """Devuelve el precio de SOL en USD, o None si falla la consulta."""
+    try:
+        r = requests.get(
+            "https://api.coingecko.com/api/v3/simple/price",
+            params={"ids": "solana", "vs_currencies": "usd"},
+            timeout=5,
+        )
+        r.raise_for_status()
+        return float(r.json()["solana"]["usd"])
+    except Exception:
+        return None
+
+
 def obtener_balance_sol(pubkey) -> float:
     r = requests.post(
         RPC_URL,
