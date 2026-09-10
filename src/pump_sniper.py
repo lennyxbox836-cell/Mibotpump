@@ -57,6 +57,14 @@ WS_URL_BASE = "wss://pumpportal.fun/api/data"
 PUMPPORTAL_API_KEY = os.environ.get("PUMPPORTAL_API_KEY", "").strip()
 WS_URL = f"{WS_URL_BASE}?api-key={PUMPPORTAL_API_KEY}" if PUMPPORTAL_API_KEY else WS_URL_BASE
 
+# Direccion publica de la wallet de PumpPortal (la del create-wallet, la
+# que paga el streaming) -- opcional, solo para que el bot te avise si se
+# esta por quedar sin fondos, en vez de descubrirlo cuando el filtro
+# vuelve a mostrar 0 traders sin explicacion.
+PUMPPORTAL_WALLET_PUBLICA = os.environ.get("PUMPPORTAL_WALLET_PUBLICA", "").strip()
+PUMPPORTAL_SALDO_MINIMO = 0.005  # SOL -- aviso por debajo de esto
+PUMPPORTAL_CHEQUEO_SALDO_SEG = 300  # cada cuanto chequear (5 min alcanza, no hace falta mas seguido)
+
 # ---------------- CONFIGURACION ----------------
 # DRY_RUN se define por la variable de entorno PUMP_LIVE (ver docstring
 # de arriba). No cambies esto a mano en el codigo -- usa PUMP_LIVE=1.
@@ -516,6 +524,25 @@ class Bot:
         return None
 
 
+async def vigilar_saldo_pumpportal():
+    """Avisa por log si la wallet de streaming de PumpPortal se esta
+    quedando sin fondos, en vez de que el usuario lo descubra cuando
+    subscribeTokenTrade deja de traer datos sin ningun error visible."""
+    loop = asyncio.get_running_loop()
+    while True:
+        try:
+            saldo = await loop.run_in_executor(None, pump_trader.obtener_balance_sol, PUMPPORTAL_WALLET_PUBLICA)
+            if saldo < PUMPPORTAL_SALDO_MINIMO:
+                log(f"AVISO: la wallet de streaming de PumpPortal tiene {saldo:.4f} SOL "
+                    f"(por debajo de {PUMPPORTAL_SALDO_MINIMO}). Si se agota del todo, "
+                    f"subscribeTokenTrade/subscribeAccountTrade dejan de traer datos reales "
+                    f"y volves a ver 0 traders sin ningun error -- cargale mas SOL a esa "
+                    f"wallet cuando puedas.")
+        except Exception as e:
+            log(f"no se pudo chequear el saldo de la wallet de PumpPortal: {e}")
+        await asyncio.sleep(PUMPPORTAL_CHEQUEO_SALDO_SEG)
+
+
 async def main():
     if DRY_RUN:
         log("=== DRY_RUN activo: no se va a mandar NINGUNA transaccion real ===")
@@ -547,6 +574,11 @@ async def main():
         log(f"saldo ficticio inicial: ${bot.billetera.saldo_usd:.2f}")
 
     await dashboard.iniciar(bot, PUERTO_DASHBOARD, log=log)
+
+    if PUMPPORTAL_WALLET_PUBLICA:
+        asyncio.create_task(vigilar_saldo_pumpportal())
+        log(f"vigilando saldo de la wallet de streaming de PumpPortal cada "
+            f"{PUMPPORTAL_CHEQUEO_SALDO_SEG}s")
 
     log(f"Conectando a {WS_URL}")
     async for ws in websockets.connect(WS_URL, ping_interval=20, ping_timeout=20):

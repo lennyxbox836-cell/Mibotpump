@@ -114,6 +114,20 @@ nunca la usa este bot para comprar ni firmar nada.
 Sin `PUMPPORTAL_API_KEY` seteada, el bot ahora **avisa explicitamente**
 en el log al arrancar en vez de fallar en silencio.
 
+**Para no quedarte sin saldo ahi sin darte cuenta**, pasale tambien la
+direccion publica de esa wallet (el `walletPublicKey` del paso 1):
+
+```bash
+export PUMPPORTAL_WALLET_PUBLICA='el_walletPublicKey_del_paso_1'
+```
+
+Con esto, el bot chequea ese saldo cada 5 minutos y avisa por log si cae
+por debajo de 0.005 SOL -- para recargarla antes de que
+`subscribeTokenTrade`/`subscribeAccountTrade` dejen de traer datos (que
+se ve exactamente igual que el problema original: candidatos con 0
+traders, sin ningun error). Es opcional; sin esta variable el bot
+funciona igual, solo que sin ese aviso preventivo.
+
 ---
 
 `pump_scanner.py` espera 300s para juntar suficientes datos y evitar
